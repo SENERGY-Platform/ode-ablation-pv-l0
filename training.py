@@ -3,19 +3,22 @@
 Separate from op.py because the two run in different places: op.py runs in the
 operator's own process for every message, while this runs distributed and rarely.
 
-What is trained: the parameters of forecast.forecast(), in two stages, each
+What is trained: the parameters of forecast.forecast(), in three stages, each
 chosen by backtesting the 24 hour ahead MAE on hourly means.
 
 1. The history rule alone -- how many earlier days, which quantile, how fast
    older days lose weight.
-2. With that fixed, the weather rule -- how many days the PV/irradiance ratio is
-   taken over, which quantile of it, how much of the forecast it carries, and
-   whether the ratio is taken from analogue hours only (band).
+2. With that fixed, the weather rule on the three-model mean forecast -- how
+   many days the PV/irradiance ratio is taken over, which quantile of it, how
+   much of the forecast it carries, and whether the ratio is taken from
+   analogue hours only (band).
+3. With those fixed, the forecast source: the three-model mean, their median,
+   or one model alone. Each is logged, so the run shows what the choice is worth.
 
 Validation windows: the last 30 days of history, and the same 30 days one year
 before the end of history, the season-matched stand-in for the month that
-follows. Every stage logs its MAE, so a run shows what each part buys, and the
-chosen parameters are logged as metrics as well as params.
+follows. Every stage logs its MAE, and the chosen parameters are logged as
+metrics as well as params.
 
 The weather input is an archived day-ahead irradiance forecast in this
 repository (weather/, see forecast.WeatherArchive and the README), not a
@@ -46,7 +49,7 @@ MIN_VALIDATION_HOURS = 100
 
 WEATHER_SOURCE = (
     "open-meteo previous-runs shortwave_radiation_previous_day1, 51.5N 10.0E, "
-    "mean of icon_seamless, ecmwf_ifs025, gfs_seamless, repository file"
+    "icon_seamless, ecmwf_ifs025, gfs_seamless and their mean, repository file"
 )
 
 
@@ -158,6 +161,16 @@ def train_model(logger: TrainMlflowLogger) -> typing.Optional[PythonModel]:
         weather_bests = [b for b in best_by_band.values() if b is not None]
         best_wx = min(weather_bests, key=lambda b: b[0]) if weather_bests else None
 
+        # Stage 3: the forecast source, with everything else fixed.
+        best_by_source = {}
+        if best_wx is not None:
+            for name in weather.sources():
+                src = float(fc.WEATHER_SOURCES.index(name))
+                best_by_source[name] = _best(means, usable, [dict(best_wx[1], src=src)], weather)
+            source_bests = [b for b in best_by_source.values() if b is not None]
+            if source_bests:
+                best_wx = min(source_bests, key=lambda b: b[0])
+
         if best_wx is not None and (best_hist is None or best_wx[0] < best_hist[0]):
             chosen = best_wx
         else:
@@ -179,9 +192,11 @@ def train_model(logger: TrainMlflowLogger) -> typing.Optional[PythonModel]:
         "n": float(params.get("n", 0)),
         "rq": float(params.get("rq", 0.0)),
         "band": float(params.get("band", 0.0)),
+        "src": float(params.get("src", fc.SRC_MEAN)),
     }
     logger.log_params(dict(
         chosen_params,
+        source_name=fc.source_name(chosen_params["src"]),
         training_window_days=TRAINING_WINDOW.days,
         validation_windows=",".join(sorted(usable)) or "none",
         weather_source=WEATHER_SOURCE,
@@ -203,6 +218,9 @@ def train_model(logger: TrainMlflowLogger) -> typing.Optional[PythonModel]:
     for band, best in best_by_band.items():
         if best is not None:
             metrics[f"val_mae_weather_band{int(round(band * 100))}"] = best[0]
+    for name, best in best_by_source.items():
+        if best is not None:
+            metrics[f"val_mae_source_{name}"] = best[0]
     for name, (value, n) in persistence.items():
         if value is not None:
             metrics[f"persistence_mae_{name}"] = value

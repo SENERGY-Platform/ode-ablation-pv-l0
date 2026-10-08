@@ -17,9 +17,11 @@ Two rules, blended:
   and the sun's angle, which differ by hour far more than by day.
 
   With band > 0 the ratio is taken only from those past hours whose forecast
-  irradiance was within +-band of the target's -- analogues -- because a tilted
-  panel converts a bright, mostly direct hour and a dull, mostly diffuse hour at
-  different ratios. Fewer than MIN_ANALOGS analogues fall back to all of them.
+  irradiance was within +-band of the target's -- analogues. Fewer than
+  MIN_ANALOGS analogues fall back to all of them.
+
+  src chooses which forecast is used: the three-model mean, their median, or
+  one model alone (an index into WEATHER_SOURCES, so that it logs as a number).
 
 prediction = alpha * weather + (1 - alpha) * history, falling back to history
 alone where there is no forecast for T or no usable ratio.
@@ -28,6 +30,7 @@ alone where there is no forecast for T or no usable ratio.
 import csv
 import datetime
 import os
+import statistics
 import typing
 
 HOUR_S = 3600
@@ -48,10 +51,14 @@ PERSISTENCE_PARAMS: typing.Dict[str, float] = {"k": 1, "q": 0.5, "decay": 1.0, "
 
 # --- weather rule -----------------------------------------------------------
 
-# n=60 and rq=0.6 were both chosen at the edge of the previous grid, so the grid
-# reaches one step further in each. band 0.0 is the unconditioned ratio.
+MODELS = ("icon_seamless", "ecmwf_ifs025", "gfs_seamless")
+WEATHER_SOURCES = ("mean", "median") + MODELS
+SRC_MEAN = 0.0
+
+# Searched on the three-model mean; the source is chosen afterwards with these
+# fixed (see training.py), so its effect is measured on its own.
 WEATHER_GRID: typing.List[typing.Dict[str, float]] = [
-    {"n": n, "rq": rq, "alpha": alpha, "band": band}
+    {"n": n, "rq": rq, "alpha": alpha, "band": band, "src": SRC_MEAN}
     for n in (7, 14, 21, 30, 60, 90)
     for rq in (0.4, 0.5, 0.6, 0.7)
     for alpha in (1.0, 0.75, 0.5)
@@ -80,15 +87,19 @@ def hour_index(at: datetime.datetime) -> int:
     return int(at.timestamp() // HOUR_S)
 
 
+def source_name(src: float) -> str:
+    return WEATHER_SOURCES[int(round(src))]
+
+
 class WeatherArchive:
     """Archived day-ahead irradiance forecasts, read with an availability guard.
 
     The file is Open-Meteo's Previous Runs API for 51.5 N 10.0 E,
-    shortwave_radiation_previous_day1, the mean of three weather models (see the
-    README): for each hour, what the model runs of one day earlier forecast. Its
-    `time` column is the moment a row became usable: the start of the forecast
-    hour (Open-Meteo stamps the end of the hour it averages) minus 24 hours. A
-    row published at hour p is the forecast for hour p + 24.
+    shortwave_radiation_previous_day1 from three weather models, with their mean
+    in ghi_forecast_day1 (see the README). Its `time` column is the moment a row
+    became usable: the start of the forecast hour (Open-Meteo stamps the end of
+    the hour it averages) minus 24 hours. A row published at hour p is the
+    forecast for hour p + 24.
 
     get() answers only when the row's publication hour is at or before the hour
     asking, so a replay can never read a forecast before it would have existed.
@@ -98,37 +109,48 @@ class WeatherArchive:
     live day-ahead forecast in its place.
     """
 
-    def __init__(self, ghi_by_target_hour: typing.Dict[int, float]) -> None:
-        self._ghi = ghi_by_target_hour
+    def __init__(self, by_source: typing.Dict[str, typing.Dict[int, float]]) -> None:
+        self._by_source = by_source
 
     @classmethod
     def load(cls, path: str = WEATHER_FILE) -> "WeatherArchive":
-        ghi: typing.Dict[int, float] = {}
+        by_source: typing.Dict[str, typing.Dict[int, float]] = {}
         if not os.path.exists(path):
-            return cls(ghi)
+            return cls(by_source)
         with open(path, newline="") as handle:
             for row in csv.DictReader(handle):
-                value = row.get("ghi_forecast_day1")
-                if value in (None, ""):
-                    continue
                 published = datetime.datetime.strptime(
                     row["time"], "%Y-%m-%dT%H:%M:%SZ"
                 ).replace(tzinfo=datetime.timezone.utc)
-                ghi[hour_index(published) + DAY_H] = float(value)
-        return cls(ghi)
+                target = hour_index(published) + DAY_H
+                mean = row.get("ghi_forecast_day1")
+                if mean not in (None, ""):
+                    by_source.setdefault("mean", {})[target] = float(mean)
+                models = {}
+                for model in MODELS:
+                    value = row.get(f"ghi_{model}")
+                    if value not in (None, ""):
+                        models[model] = float(value)
+                        by_source.setdefault(model, {})[target] = float(value)
+                if len(models) == len(MODELS):
+                    by_source.setdefault("median", {})[target] = statistics.median(models.values())
+        return cls(by_source)
 
     def __len__(self) -> int:
-        return len(self._ghi)
+        return len(self._by_source.get("mean", {}))
 
-    def get(self, target_hour: int, now_hour: int) -> typing.Optional[float]:
+    def sources(self) -> typing.List[str]:
+        return [s for s in WEATHER_SOURCES if self._by_source.get(s)]
+
+    def get(self, target_hour: int, now_hour: int, src: float = SRC_MEAN) -> typing.Optional[float]:
         if target_hour - DAY_H > now_hour:
             return None
-        return self._ghi.get(target_hour)
+        return self._by_source.get(source_name(src), {}).get(target_hour)
 
-    def get_past(self, hour: int) -> typing.Optional[float]:
+    def get_past(self, hour: int, src: float = SRC_MEAN) -> typing.Optional[float]:
         """The forecast that was issued for an hour already in the past -- for
         the ratio, which compares what was forecast with what happened."""
-        return self._ghi.get(hour)
+        return self._by_source.get(source_name(src), {}).get(hour)
 
 
 def weighted_quantile(values: typing.Sequence[float], weights: typing.Sequence[float], q: float) -> float:
@@ -172,7 +194,8 @@ def weather_forecast(
     now_hour: int,
     params: typing.Dict[str, float],
 ) -> typing.Optional[float]:
-    ghi = weather.get(target_hour, now_hour)
+    src = float(params.get("src", SRC_MEAN))
+    ghi = weather.get(target_hour, now_hour, src)
     if ghi is None:
         return None
     if ghi < MIN_GHI:
@@ -180,7 +203,7 @@ def weather_forecast(
     candidates = []
     for lag in range(1, int(params["n"]) + 1):
         hour = target_hour - lag * DAY_H
-        past_ghi = weather.get_past(hour)
+        past_ghi = weather.get_past(hour, src)
         actual = lookup(hour)
         if past_ghi is None or actual is None or past_ghi < MIN_GHI:
             continue
