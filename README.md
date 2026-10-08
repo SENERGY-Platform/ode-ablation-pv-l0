@@ -28,11 +28,20 @@ It forecasts the PV generation of the APSystems DS3-S inverter ("Wechselrichter"
 "weather/openmeteo_prevday1_51.5N_10.0E.csv" was fetched on 2026-10-08 from the
 Open-Meteo Previous Runs API (https://previous-runs-api.open-meteo.com/v1/forecast)
 for latitude 51.5, longitude 10.0, variable "shortwave_radiation_previous_day1"
-(W/m²), 2025-06-01 to 2026-10-02 UTC, from three weather models:
-"icon_seamless" (DWD), "ecmwf_ifs025" (ECMWF) and "gfs_seamless" (NOAA). Each
-model is its own column ("ghi_<model>"); "ghi_forecast_day1", the column the
-operator reads, is their mean. All three cover the whole file without a gap.
+(W/m²), 2025-06-01 to 2026-10-02 UTC, from six weather models: "icon_seamless"
+(DWD), "ecmwf_ifs025" (ECMWF), "gfs_seamless" (NOAA), "meteofrance_seamless"
+(Météo-France), "knmi_seamless" (KNMI) and "dmi_seamless" (DMI). Each model is
+its own column ("ghi_<model>"); "ghi_forecast_day1", the column the operator
+reads by default, is their mean. All six cover the whole file without a gap.
 These are forecasts from the model runs one day earlier, not measured weather.
+
+"ukmo_seamless" (UK Met Office) was fetched as well and left out: it is missing
+102 hours inside the span training and the test month need, and a mean whose
+membership changes from hour to hour is not one forecast.
+
+The "seamless" variants blend a regional model with a global one, so the six are
+not fully independent of each other; in particular the KNMI and DMI regional
+models are driven by ECMWF at their boundaries.
 
 Its "time" column is when a row became usable, not the hour it describes: the
 start of the forecast hour minus 24 hours (Open-Meteo stamps the end of the hour
@@ -41,8 +50,9 @@ keeps the evaluation replay from seeing a forecast before it existed. The
 one-day-earlier run is an approximation of what was available 24 hours ahead;
 the exact issue time of each run is not in the file.
 
-An earlier version of this file (commits f82e174 and a78b635) carried Open-Meteo's
-single default model ("best_match") instead of the three-model mean.
+Earlier versions of this file: commits f82e174 and a78b635 carried Open-Meteo's
+single default model ("best_match"); commits 0f784f9 to ad5512f the mean of
+icon_seamless, ecmwf_ifs025 and gfs_seamless.
 
 It is not a platform input. No simulatable device type carries an irradiance
 service that can hold history, so the forecast lives here rather than on a

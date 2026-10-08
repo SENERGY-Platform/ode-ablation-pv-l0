@@ -20,8 +20,8 @@ Two rules, blended:
   irradiance was within +-band of the target's -- analogues. Fewer than
   MIN_ANALOGS analogues fall back to all of them.
 
-  src chooses which forecast is used: the three-model mean, their median, or
-  one model alone (an index into WEATHER_SOURCES, so that it logs as a number).
+  src chooses which forecast is used: the multi-model mean, the median, or one
+  model alone (an index into WEATHER_SOURCES, so that it logs as a number).
 
 prediction = alpha * weather + (1 - alpha) * history, falling back to history
 alone where there is no forecast for T or no usable ratio.
@@ -51,11 +51,20 @@ PERSISTENCE_PARAMS: typing.Dict[str, float] = {"k": 1, "q": 0.5, "decay": 1.0, "
 
 # --- weather rule -----------------------------------------------------------
 
-MODELS = ("icon_seamless", "ecmwf_ifs025", "gfs_seamless")
+# The models in weather/, each a ghi_<model> column; ghi_forecast_day1 is their
+# mean. See the README for why ukmo_seamless is not among them.
+MODELS = (
+    "icon_seamless",
+    "ecmwf_ifs025",
+    "gfs_seamless",
+    "meteofrance_seamless",
+    "knmi_seamless",
+    "dmi_seamless",
+)
 WEATHER_SOURCES = ("mean", "median") + MODELS
 SRC_MEAN = 0.0
 
-# Searched on the three-model mean; the source is chosen afterwards with these
+# Searched on the multi-model mean; the source is chosen afterwards with these
 # fixed (see training.py), so its effect is measured on its own.
 WEATHER_GRID: typing.List[typing.Dict[str, float]] = [
     {"n": n, "rq": rq, "alpha": alpha, "band": band, "src": SRC_MEAN}
@@ -95,11 +104,11 @@ class WeatherArchive:
     """Archived day-ahead irradiance forecasts, read with an availability guard.
 
     The file is Open-Meteo's Previous Runs API for 51.5 N 10.0 E,
-    shortwave_radiation_previous_day1 from three weather models, with their mean
-    in ghi_forecast_day1 (see the README). Its `time` column is the moment a row
-    became usable: the start of the forecast hour (Open-Meteo stamps the end of
-    the hour it averages) minus 24 hours. A row published at hour p is the
-    forecast for hour p + 24.
+    shortwave_radiation_previous_day1 from the weather models in MODELS, with
+    their mean in ghi_forecast_day1 (see the README). Its `time` column is the
+    moment a row became usable: the start of the forecast hour (Open-Meteo
+    stamps the end of the hour it averages) minus 24 hours. A row published at
+    hour p is the forecast for hour p + 24.
 
     get() answers only when the row's publication hour is at or before the hour
     asking, so a replay can never read a forecast before it would have existed.

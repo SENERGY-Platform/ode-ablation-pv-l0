@@ -8,12 +8,12 @@ chosen by backtesting the 24 hour ahead MAE on hourly means.
 
 1. The history rule alone -- how many earlier days, which quantile, how fast
    older days lose weight.
-2. With that fixed, the weather rule on the three-model mean forecast -- how
+2. With that fixed, the weather rule on the multi-model mean forecast -- how
    many days the PV/irradiance ratio is taken over, which quantile of it, how
    much of the forecast it carries, and whether the ratio is taken from
    analogue hours only (band).
-3. With those fixed, the forecast source: the three-model mean, their median,
-   or one model alone. Each is logged, so the run shows what the choice is worth.
+3. With those fixed, the forecast source: the multi-model mean, the median, or
+   one model alone. Each is logged, so the run shows what the choice is worth.
 
 Validation windows: the last 30 days of history, and the same 30 days one year
 before the end of history, the season-matched stand-in for the month that
@@ -49,7 +49,8 @@ MIN_VALIDATION_HOURS = 100
 
 WEATHER_SOURCE = (
     "open-meteo previous-runs shortwave_radiation_previous_day1, 51.5N 10.0E, "
-    "icon_seamless, ecmwf_ifs025, gfs_seamless and their mean, repository file"
+    + ", ".join(fc.MODELS)
+    + " and their mean, repository file"
 )
 
 
