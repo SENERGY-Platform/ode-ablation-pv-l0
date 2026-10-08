@@ -9,11 +9,13 @@ chosen by backtesting the 24 hour ahead MAE on hourly means.
 1. The history rule alone -- how many earlier days, which quantile, how fast
    older days lose weight.
 2. With that fixed, the weather rule -- how many days the PV/irradiance ratio is
-   taken over, which quantile of it, and how much of the forecast it carries.
+   taken over, which quantile of it, how much of the forecast it carries, and
+   whether the ratio is taken from analogue hours only (band).
 
 Validation windows: the last 30 days of history, and the same 30 days one year
 before the end of history, the season-matched stand-in for the month that
-follows. Both stages log their MAE, so a run shows what the weather input buys.
+follows. Every stage logs its MAE, so a run shows what each part buys, and the
+chosen parameters are logged as metrics as well as params.
 
 The weather input is an archived day-ahead irradiance forecast in this
 repository (weather/, see forecast.WeatherArchive), not a platform input.
@@ -32,8 +34,8 @@ import forecast as fc
 
 
 # A year for the season-matched validation window, plus the longest lookback
-# the grid can ask for, plus slack.
-TRAINING_WINDOW = datetime.timedelta(days=400)
+# the grid can ask for (60 days), plus slack.
+TRAINING_WINDOW = datetime.timedelta(days=430)
 VALIDATION_DAYS = 30
 # A validation window with fewer scored hours than this is left out of the
 # selection rather than allowed to decide it.
@@ -140,10 +142,13 @@ def train_model(logger: TrainMlflowLogger) -> typing.Optional[PythonModel]:
         best_hist = _best(means, usable, history_grid, None)
         hist_params = best_hist[1] if best_hist is not None else dict(fc.DEFAULT_PARAMS)
 
-        best_wx = None
+        best_by_band = {}
         if len(weather):
-            weather_grid = [dict(hist_params, **p) for p in fc.WEATHER_GRID]
-            best_wx = _best(means, usable, weather_grid, weather)
+            for band in sorted({p["band"] for p in fc.WEATHER_GRID}):
+                grid = [dict(hist_params, **p) for p in fc.WEATHER_GRID if p["band"] == band]
+                best_by_band[band] = _best(means, usable, grid, weather)
+        weather_bests = [b for b in best_by_band.values() if b is not None]
+        best_wx = min(weather_bests, key=lambda b: b[0]) if weather_bests else None
 
         if best_wx is not None and (best_hist is None or best_wx[0] < best_hist[0]):
             chosen = best_wx
@@ -158,22 +163,25 @@ def train_model(logger: TrainMlflowLogger) -> typing.Optional[PythonModel]:
     seed_from = end_hour - (fc.MAX_LOOKBACK_DAYS + 2) * fc.DAY_H
     seed = {h: v for h, v in stats.items() if h >= seed_from}
 
-    logger.log_params({
-        "training_window_days": TRAINING_WINDOW.days,
-        "validation_windows": ",".join(sorted(usable)) or "none",
-        "weather_source": "open-meteo previous-runs shortwave_radiation_previous_day1, 51.5N 10.0E, repository file",
-        "weather_hours": len(weather),
-        "k": params["k"],
-        "q": params["q"],
-        "decay": params["decay"],
-        "alpha": params.get("alpha", 0.0),
-        "n": params.get("n", 0),
-        "rq": params.get("rq", 0.0),
-    })
-    metrics = {
-        "hours_with_data": float(len(means)),
-        "seed_hours": float(len(seed)),
+    chosen_params = {
+        "k": float(params["k"]),
+        "q": float(params["q"]),
+        "decay": float(params["decay"]),
+        "alpha": float(params.get("alpha", 0.0)),
+        "n": float(params.get("n", 0)),
+        "rq": float(params.get("rq", 0.0)),
+        "band": float(params.get("band", 0.0)),
     }
+    logger.log_params(dict(
+        chosen_params,
+        training_window_days=TRAINING_WINDOW.days,
+        validation_windows=",".join(sorted(usable)) or "none",
+        weather_source="open-meteo previous-runs shortwave_radiation_previous_day1, 51.5N 10.0E, repository file",
+        weather_hours=len(weather),
+    ))
+    metrics = {f"chosen_{name}": value for name, value in chosen_params.items()}
+    metrics["hours_with_data"] = float(len(means))
+    metrics["seed_hours"] = float(len(seed))
     if chosen is not None:
         metrics["val_mae"] = chosen[0]
         for name, value in chosen[2].items():
@@ -184,6 +192,9 @@ def train_model(logger: TrainMlflowLogger) -> typing.Optional[PythonModel]:
             metrics[f"val_mae_history_only_{name}"] = value
     if best_wx is not None:
         metrics["val_mae_with_weather"] = best_wx[0]
+    for band, best in best_by_band.items():
+        if best is not None:
+            metrics[f"val_mae_weather_band{int(round(band * 100))}"] = best[0]
     for name, (value, n) in persistence.items():
         if value is not None:
             metrics[f"persistence_mae_{name}"] = value

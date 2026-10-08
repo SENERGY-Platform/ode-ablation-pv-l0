@@ -16,6 +16,11 @@ Two rules, blended:
   last n days. The same hour, because the ratio carries the panel orientation
   and the sun's angle, which differ by hour far more than by day.
 
+  With band > 0 the ratio is taken only from those past hours whose forecast
+  irradiance was within +-band of the target's -- analogues -- because a tilted
+  panel converts a bright, mostly direct hour and a dull, mostly diffuse hour at
+  different ratios. Fewer than MIN_ANALOGS analogues fall back to all of them.
+
 prediction = alpha * weather + (1 - alpha) * history, falling back to history
 alone where there is no forecast for T or no usable ratio.
 """
@@ -43,15 +48,19 @@ PERSISTENCE_PARAMS: typing.Dict[str, float] = {"k": 1, "q": 0.5, "decay": 1.0, "
 
 # --- weather rule -----------------------------------------------------------
 
+# band 0.0 is the unconditioned ratio of the previous commit, kept so the
+# backtest reports what the analogue band is worth.
 WEATHER_GRID: typing.List[typing.Dict[str, float]] = [
-    {"n": n, "rq": rq, "alpha": alpha}
-    for n in (7, 14, 21, 30)
+    {"n": n, "rq": rq, "alpha": alpha, "band": band}
+    for n in (7, 14, 21, 30, 60)
     for rq in (0.4, 0.5, 0.6)
     for alpha in (1.0, 0.75, 0.5)
+    for band in (0.0, 0.3)
 ]
 # Below this forecast irradiance, in W/m², a ratio PV/irradiance is noise
 # divided by almost nothing and is not used.
 MIN_GHI = 20.0
+MIN_ANALOGS = 3
 
 MAX_LOOKBACK_DAYS = max(
     [int(p["k"]) for p in HISTORY_GRID] + [int(p["n"]) for p in WEATHER_GRID]
@@ -168,16 +177,22 @@ def weather_forecast(
         return None
     if ghi < MIN_GHI:
         return 0.0
-    ratios = []
+    candidates = []
     for lag in range(1, int(params["n"]) + 1):
         hour = target_hour - lag * DAY_H
         past_ghi = weather.get_past(hour)
         actual = lookup(hour)
         if past_ghi is None or actual is None or past_ghi < MIN_GHI:
             continue
-        ratios.append(actual / past_ghi)
-    if not ratios:
+        candidates.append((actual / past_ghi, past_ghi))
+    if not candidates:
         return None
+    band = float(params.get("band", 0.0))
+    ratios = [r for r, _ in candidates]
+    if band > 0.0:
+        close = [r for r, g in candidates if abs(g - ghi) <= band * ghi]
+        if len(close) >= MIN_ANALOGS:
+            ratios = close
     ratio = weighted_quantile(ratios, [1.0] * len(ratios), float(params["rq"]))
     return max(0.0, ratio * ghi)
 
