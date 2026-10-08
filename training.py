@@ -18,7 +18,8 @@ follows. Every stage logs its MAE, so a run shows what each part buys, and the
 chosen parameters are logged as metrics as well as params.
 
 The weather input is an archived day-ahead irradiance forecast in this
-repository (weather/, see forecast.WeatherArchive), not a platform input.
+repository (weather/, see forecast.WeatherArchive and the README), not a
+platform input.
 """
 
 import datetime
@@ -40,6 +41,11 @@ VALIDATION_DAYS = 30
 # A validation window with fewer scored hours than this is left out of the
 # selection rather than allowed to decide it.
 MIN_VALIDATION_HOURS = 100
+
+WEATHER_SOURCE = (
+    "open-meteo previous-runs shortwave_radiation_previous_day1, 51.5N 10.0E, "
+    "mean of icon_seamless, ecmwf_ifs025, gfs_seamless, repository file"
+)
 
 
 class OdeAblationPvL0Model(PythonModel):
@@ -176,7 +182,7 @@ def train_model(logger: TrainMlflowLogger) -> typing.Optional[PythonModel]:
         chosen_params,
         training_window_days=TRAINING_WINDOW.days,
         validation_windows=",".join(sorted(usable)) or "none",
-        weather_source="open-meteo previous-runs shortwave_radiation_previous_day1, 51.5N 10.0E, repository file",
+        weather_source=WEATHER_SOURCE,
         weather_hours=len(weather),
     ))
     metrics = {f"chosen_{name}": value for name, value in chosen_params.items()}
