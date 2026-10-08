@@ -3,6 +3,9 @@
 An analytics operator for the SENERGY platform, scaffolded by the Operator
 Development Environment. Every file here is yours to change, including this one.
 
+It forecasts the PV generation of the APSystems DS3-S inverter ("Wechselrichter",
+`root.powerTotal`) 24 hours ahead, as hourly mean power in watts.
+
 ## Layout
 
 | File | What it is |
@@ -10,13 +13,36 @@ Development Environment. Every file here is yours to change, including this one.
 | "main.py" | Entry point of the deployed operator. Hands the process to Operator Lib. |
 | "train.py" | Entry point of an experiment. Trains through Operator Lib, then exits. |
 | "op.py" | The operator: "infer", "train", "need_retraining", and its config. |
+| "forecast.py" | The forecast rule and the weather archive reader, shared by training and inference. |
 | "training.py" | The Ray training pass and the model MLflow registers. |
+| "weather/" | The archived day-ahead irradiance forecast the operator reads (see below). |
 | "pyproject.toml" | Dependencies, with Operator Lib pinned at "v1.8.1". |
 | "uv.lock" | The resolved dependencies. Written by the scaffold; refresh it yourself. See below. |
 | "Dockerfile" | The image. Built by CI; buildable by hand. |
 | ".github/workflows/build.yml" | Builds and pushes "ghcr.io/senergy-platform/ode-ablation-pv-l0". Change the registry here. |
 | "operator.yaml" | What the analytics stack registers: inputs, outputs, config. |
 | "evaluation.yaml" | Your criteria for whether a run is good, plus what Operator Lib needs to score a test window itself. ODE never writes this. |
+
+## The weather input
+
+"weather/openmeteo_prevday1_51.5N_10.0E.csv" was fetched on 2026-10-08 from the
+Open-Meteo Previous Runs API (https://previous-runs-api.open-meteo.com/v1/forecast)
+for latitude 51.5, longitude 10.0 (grid point 51.50 N 10.01 E, 230 m), variables
+"shortwave_radiation_previous_day1" (W/m²) and "cloud_cover_previous_day1" (%),
+2025-06-01 to 2026-10-02 UTC. These are forecasts from the model run one day
+earlier, not measured weather.
+
+Its "time" column is when a row became usable, not the hour it describes: the
+start of the forecast hour minus 24 hours (Open-Meteo stamps the end of the hour
+it averages). The operator reads a row only at or after that time, which is what
+keeps the evaluation replay from seeing a forecast before it existed. The
+one-day-earlier run is an approximation of what was available 24 hours ahead;
+the exact issue time of each run is not in the file.
+
+It is not a platform input. No simulatable device type carries an irradiance
+service that can hold history, so the forecast lives here rather than on a
+device. The file ends on 2026-10-01; after that the operator falls back to its
+history-only rule. A deployment needs a live day-ahead forecast in its place.
 
 ## The lock file
 

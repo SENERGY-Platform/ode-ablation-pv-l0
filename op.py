@@ -8,6 +8,10 @@ when need_retraining() says so. Training runs on Ray.
 This operator forecasts PV generation 24 hours ahead as an hourly mean in watts.
 Every message updates the running mean of the UTC hour it falls in, and answers
 with the forecast for the hour 24 hours later, stamped with that time.
+
+The day-ahead irradiance forecast comes from the archive in weather/ (see
+forecast.WeatherArchive), read only as of the message's own hour. Where it has
+no row -- after 2026-10-01, in a deployment -- the history rule answers alone.
 """
 
 import datetime
@@ -62,6 +66,7 @@ class Operator(MLOperator):
         self._params: typing.Dict[str, float] = dict(fc.DEFAULT_PARAMS)
         self._model_ref: typing.Optional[PyFuncModel] = None
         self._last_hour: typing.Optional[int] = None
+        self._weather = fc.WeatherArchive.load()
         super().init(*args, **kwargs)
 
     def _adopt(self, model: PyFuncModel) -> None:
@@ -84,7 +89,7 @@ class Operator(MLOperator):
         return self._sums[hour] / count
 
     def _prune(self, hour: int) -> None:
-        keep_from = hour - (fc.MAX_K + 2) * fc.DAY_H
+        keep_from = hour - (fc.MAX_LOOKBACK_DAYS + 2) * fc.DAY_H
         for old in [h for h in self._counts if h < keep_from]:
             del self._counts[old]
             self._sums.pop(old, None)
@@ -117,7 +122,9 @@ class Operator(MLOperator):
             self._prune(hour)
             self._last_hour = hour
 
-        prediction = fc.forecast(self._mean, hour + fc.DAY_H, self._params)
+        prediction = fc.forecast(
+            self._mean, hour + fc.DAY_H, self._params, self._weather, now_hour=hour
+        )
         return timestamp + HORIZON, {"prediction": prediction}, None
 
     def train(
