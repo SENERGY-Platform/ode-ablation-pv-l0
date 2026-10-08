@@ -35,8 +35,10 @@ import forecast as fc
 
 
 # A year for the season-matched validation window, plus the longest lookback
-# the grid can ask for (60 days), plus slack.
-TRAINING_WINDOW = datetime.timedelta(days=430)
+# the grid can ask for (90 days), plus slack. 460 days back from the training
+# end of 2026-09-01 is 2025-05-29; the weather file starts on 2025-05-31, which
+# still covers the 90 days before the year-earlier window (from 2025-06-03).
+TRAINING_WINDOW = datetime.timedelta(days=460)
 VALIDATION_DAYS = 30
 # A validation window with fewer scored hours than this is left out of the
 # selection rather than allowed to decide it.

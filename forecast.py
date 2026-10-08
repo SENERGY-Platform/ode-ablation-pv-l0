@@ -48,12 +48,12 @@ PERSISTENCE_PARAMS: typing.Dict[str, float] = {"k": 1, "q": 0.5, "decay": 1.0, "
 
 # --- weather rule -----------------------------------------------------------
 
-# band 0.0 is the unconditioned ratio of the previous commit, kept so the
-# backtest reports what the analogue band is worth.
+# n=60 and rq=0.6 were both chosen at the edge of the previous grid, so the grid
+# reaches one step further in each. band 0.0 is the unconditioned ratio.
 WEATHER_GRID: typing.List[typing.Dict[str, float]] = [
     {"n": n, "rq": rq, "alpha": alpha, "band": band}
-    for n in (7, 14, 21, 30, 60)
-    for rq in (0.4, 0.5, 0.6)
+    for n in (7, 14, 21, 30, 60, 90)
+    for rq in (0.4, 0.5, 0.6, 0.7)
     for alpha in (1.0, 0.75, 0.5)
     for band in (0.0, 0.3)
 ]
@@ -84,11 +84,11 @@ class WeatherArchive:
     """Archived day-ahead irradiance forecasts, read with an availability guard.
 
     The file is Open-Meteo's Previous Runs API for 51.5 N 10.0 E,
-    shortwave_radiation_previous_day1: for each hour, what the model run of one
-    day earlier forecast. Its `time` column is the moment a row became usable:
-    the start of the forecast hour (Open-Meteo stamps the end of the hour it
-    averages) minus 24 hours. A row published at hour p is the forecast for hour
-    p + 24.
+    shortwave_radiation_previous_day1, the mean of three weather models (see the
+    README): for each hour, what the model runs of one day earlier forecast. Its
+    `time` column is the moment a row became usable: the start of the forecast
+    hour (Open-Meteo stamps the end of the hour it averages) minus 24 hours. A
+    row published at hour p is the forecast for hour p + 24.
 
     get() answers only when the row's publication hour is at or before the hour
     asking, so a replay can never read a forecast before it would have existed.
